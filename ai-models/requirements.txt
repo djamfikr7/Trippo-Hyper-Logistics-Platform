@@ -1,0 +1,8 @@
+deepface
+opencv-python
+numpy
+flask
+requests
+pytesseract
+Pillow
+librt-translate
