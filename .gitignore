@@ -1,0 +1,66 @@
+# System Files
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+dist/
+build/
+.npm
+.eslintcache
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.docker
+
+# Monitoring and Data
+postgres_data/
+redis_data/
+rabbitmq_data/
+minio_data/
+opensearch_data/
+valhalla-tiles/
+mbtiles/
+nominatim-data/
+
+# IDEs and Editors
+.idea/
+.vsc/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# AI Models
+ai-models/*/venv/
+ai-models/*/__pycache__/
+ai-models/*/*.pyc
+
+# Local binary and generated files
+infrastructure/valhalla/*
+!infrastructure/valhalla/.gitkeep
+infrastructure/tiles/*
+!infrastructure/tiles/.gitkeep

@@ -1,0 +1,396 @@
+version: '3.8'
+
+services:
+  # ===========================================
+  # DATABASE SERVICES
+  # ===========================================
+  
+  postgres:
+    image: postgis/postgis:15-3.4-alpine
+    container_name: trippo-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trippo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trippo_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-trippo}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./infrastructure/postgres/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - trippo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trippo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: trippo-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secret}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - trippo-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: trippo-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-trippo}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitmq_secret}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - trippo-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: trippo-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-trippo}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minio_secret}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - trippo-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: trippo-opensearch
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    networks:
+      - trippo-network
+    restart: unless-stopped
+
+  # ===========================================
+  # MAP SERVICES
+  # ===========================================
+  
+  valhalla:
+    image: ghcr.io/gis-ops/valhalla:latest
+    container_name: trippo-valhalla
+    volumes:
+      - ./infrastructure/valhalla:/custom_files
+    ports:
+      - "8002:8002"
+    networks:
+      - trippo-network
+    restart: unless-stopped
+
+  tileserver:
+    image: maptiler/tileserver-gl:latest
+    container_name: trippo-tileserver
+    volumes:
+      - ./infrastructure/tiles:/data
+    ports:
+      - "8080:8080"
+    networks:
+      - trippo-network
+    restart: unless-stopped
+
+  # ===========================================
+  # AI SERVICES
+  # ===========================================
+  
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: trippo-translate
+    environment:
+      LT_LOAD_ONLY: "en,ar,fr"
+      LT_UPDATE_MODELS: "true"
+    ports:
+      - "5050:5000"
+    networks:
+      - trippo-network
+    restart: unless-stopped
+
+  # ===========================================
+  # BACKEND SERVICES
+  # ===========================================
+  
+  api-gateway:
+    build:
+      context: ./backend/api-gateway
+      dockerfile: Dockerfile
+    container_name: trippo-api-gateway
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+      - JWT_SECRET=${JWT_SECRET:-your_jwt_secret_key_here}
+      - JWT_EXPIRES_IN=7d
+    ports:
+      - "3000:3000"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ./backend/auth-service
+      dockerfile: Dockerfile
+    container_name: trippo-auth
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+      - JWT_SECRET=${JWT_SECRET:-your_jwt_secret_key_here}
+    ports:
+      - "3001:3001"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  booking-service:
+    build:
+      context: ./backend/booking-service
+      dockerfile: Dockerfile
+    container_name: trippo-booking
+    environment:
+      - NODE_ENV=development
+      - PORT=3002
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+    ports:
+      - "3002:3002"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tracking-service:
+    build:
+      context: ./backend/tracking-service
+      dockerfile: Dockerfile
+    container_name: trippo-tracking
+    environment:
+      - NODE_ENV=development
+      - PORT=3003
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+    ports:
+      - "3003:3003"
+    networks:
+      - trippo-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  matching-service:
+    build:
+      context: ./backend/matching-service
+      dockerfile: Dockerfile
+    container_name: trippo-matching
+    environment:
+      - NODE_ENV=development
+      - PORT=3004
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+      - VALHALLA_URL=http://valhalla:8002
+    ports:
+      - "3004:3004"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  payment-service:
+    build:
+      context: ./backend/payment-service
+      dockerfile: Dockerfile
+    container_name: trippo-payment
+    environment:
+      - NODE_ENV=development
+      - PORT=3005
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+    ports:
+      - "3005:3005"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  chat-service:
+    build:
+      context: ./backend/chat-service
+      dockerfile: Dockerfile
+    container_name: trippo-chat
+    environment:
+      - NODE_ENV=development
+      - PORT=3006
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+    ports:
+      - "3006:3006"
+    networks:
+      - trippo-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  fraud-service:
+    build:
+      context: ./backend/fraud-service
+      dockerfile: Dockerfile
+    container_name: trippo-fraud
+    environment:
+      - NODE_ENV=development
+      - PORT=3007
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+    ports:
+      - "3007:3007"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: ./backend/notification-service
+      dockerfile: Dockerfile
+    container_name: trippo-notification
+    environment:
+      - NODE_ENV=development
+      - PORT=3008
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+    ports:
+      - "3008:3008"
+    networks:
+      - trippo-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  loyalty-service:
+    build:
+      context: ./backend/loyalty-service
+      dockerfile: Dockerfile
+    container_name: trippo-loyalty
+    environment:
+      - NODE_ENV=development
+      - PORT=3009
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-trippo}:${POSTGRES_PASSWORD:-trippo_secret}@postgres:5432/${POSTGRES_DB:-trippo}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-trippo}:${RABBITMQ_PASSWORD:-rabbitmq_secret}@rabbitmq:5672
+    ports:
+      - "3009:3009"
+    networks:
+      - trippo-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ===========================================
+  # REVERSE PROXY
+  # ===========================================
+  
+  traefik:
+    image: traefik:v2.10
+    container_name: trippo-traefik
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8088:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/traefik:/etc/traefik
+    networks:
+      - trippo-network
+    restart: unless-stopped
+
+networks:
+  trippo-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  opensearch_data:
