@@ -1,0 +1,30 @@
+name: shared_core
+description: Shared core library for Trippo apps
+version: 1.0.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.10.4 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.4.9
+  dio: ^5.4.0
+  flutter_secure_storage: ^9.0.0
+  google_fonts: ^6.1.0
+  latlong2: ^0.9.1
+  flutter_map: ^6.1.0
+  geolocator: ^10.1.0
+  intl: ^0.18.1
+  uuid: ^4.2.2
+  logger: ^2.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
